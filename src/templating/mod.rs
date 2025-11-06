@@ -1,18 +1,26 @@
+use log::warn;
 use std::path::PathBuf;
 use std::str::FromStr;
-use log::{warn};
 mod errors;
 pub use errors::{GroonError, TagParseError};
 pub enum GroonTag {
-    Insert(PathBuf)
+    Insert(PathBuf),
 }
 pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String, GroonError> {
     const GROON_TAG_START: &str = "<?groon ";
-    let content = tokio::fs::read_to_string(path.clone())
-        .await?;
+    const COMMENT_TAG_START: &str = "<!-- ";
+    const COMMENT_TAG_END: &str = " -->";
+    let content = tokio::fs::read_to_string(path.clone()).await?;
     let mut ret = String::with_capacity(content.len());
     let mut slice = &content[..];
     while let Some(idx) = slice.find(GROON_TAG_START) {
+        if let Some(comment_start) = slice.find(COMMENT_TAG_START) {
+            let comment_end = slice.find(COMMENT_TAG_END).ok_or(GroonError::UnclosedComment)?;
+            if comment_start < idx && comment_end > idx {
+                slice = &slice[comment_end + 1..];
+                continue;
+            }
+        }
         ret.push_str(&slice[..idx]);
         slice = &slice[idx..];
         let Some(tag_end) = slice.find('>') else {
@@ -33,15 +41,11 @@ pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String,
                         Box::pin(process_html_file(temps.join(template_path), temps)).await?
                     }
                     Some("md") => {
-                        let md = tokio::fs::read_to_string(temps.join(template_path))
-                            .await?;
-                        markdown::to_html_with_options(&md, &markdown::Options::gfm()).unwrap()
+                        process_markdown_file(temps.join(template_path)).await?
                     }
                     _ => {
-                        warn!(
-                            "Invalid insert template file type"
-                        );
-                        return Ok("".to_string())
+                        warn!("Invalid insert template file type");
+                        return Ok("".to_string());
                     }
                 }
             }
@@ -52,6 +56,10 @@ pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String,
     ret.push_str(slice);
     Ok(ret)
 }
+pub async fn process_markdown_file(path: PathBuf) -> Result<String, GroonError> {
+    let md = tokio::fs::read_to_string(path).await?;
+    Ok(markdown::to_html_with_options(&md, &markdown::Options::gfm()).unwrap())
+}
 fn parse_groon_tag(tag_str: &str) -> Result<GroonTag, TagParseError> {
     let mut spl = tag_str.split('=');
     let Some(kwd) = spl.next() else {
@@ -59,9 +67,13 @@ fn parse_groon_tag(tag_str: &str) -> Result<GroonTag, TagParseError> {
     };
     match kwd {
         "insert" => {
-            let path = spl.next().ok_or(TagParseError::MissingValue { attr: kwd.to_string() })?;
+            let path = spl.next().ok_or(TagParseError::MissingValue {
+                attr: kwd.to_string(),
+            })?;
             if !path.starts_with('"') || !path.ends_with('"') {
-                return Err(TagParseError::UnquotedValue { attr: kwd.to_string() });
+                return Err(TagParseError::UnquotedValue {
+                    attr: kwd.to_string(),
+                });
             }
             let path = &path[1..path.len() - 1];
             Ok(GroonTag::Insert(PathBuf::from_str(path).unwrap()))

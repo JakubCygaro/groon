@@ -1,4 +1,3 @@
-use actix_web::ResponseError;
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, middleware::Logger, web};
 use log::{debug, info, warn};
 use std::path::{self, PathBuf};
@@ -53,6 +52,10 @@ async fn serve_files(
     match relpath.extension().and_then(|ex| ex.to_str()) {
         Some("html") => {
             let tmp = templating::process_html_file(relpath, &state.templates).await?;
+            Ok(HttpResponse::Ok().body(tmp))
+        },
+        Some("md") => {
+            let tmp = templating::process_markdown_file(relpath).await?;
             Ok(HttpResponse::Ok().body(tmp))
         },
         _ => {

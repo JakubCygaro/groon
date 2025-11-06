@@ -12,6 +12,8 @@ pub enum GroonError {
     PrematureEnd,
     #[error("Tag parsing error")]
     TagParse(#[from] TagParseError),
+    #[error("Unclosed comment")]
+    UnclosedComment
 }
 impl actix_web::error::ResponseError for GroonError {
     fn error_response(&self) -> actix_web::HttpResponse<actix_web::body::BoxBody> {
