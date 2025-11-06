@@ -1,1 +1,4 @@
 /target
+/wwwroot
+/templates
+/Cargo.lock
