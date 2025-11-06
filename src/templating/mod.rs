@@ -8,8 +8,8 @@ pub enum GroonTag {
 }
 pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String, GroonError> {
     const GROON_TAG_START: &str = "<?groon ";
-    const COMMENT_TAG_START: &str = "<!-- ";
-    const COMMENT_TAG_END: &str = " -->";
+    const COMMENT_TAG_START: &str = "<!--";
+    const COMMENT_TAG_END: &str = "-->";
     let content = tokio::fs::read_to_string(path.clone()).await?;
     let mut ret = String::with_capacity(content.len());
     let mut slice = &content[..];
@@ -17,7 +17,8 @@ pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String,
         if let Some(comment_start) = slice.find(COMMENT_TAG_START) {
             let comment_end = slice.find(COMMENT_TAG_END).ok_or(GroonError::UnclosedComment)?;
             if comment_start < idx && comment_end > idx {
-                slice = &slice[comment_end + 1..];
+                ret.push_str(&slice[..comment_start]);
+                slice = &slice[comment_end + COMMENT_TAG_END.len()..];
                 continue;
             }
         }
