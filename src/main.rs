@@ -11,6 +11,36 @@ struct AppState {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    let args = clap::Command::new("groon-server")
+        .arg(
+            clap::Arg::new("address")
+                .env("GROONADDRESS")
+                .short('a')
+                .long("address"),
+        )
+        .arg(
+            clap::Arg::new("port")
+                .env("GROONPORT")
+                .short('p')
+                .long("port"),
+        )
+        .arg(
+            clap::Arg::new("templates")
+                .env("GROONTEMPLATES")
+                .long("templates-dir"),
+        )
+        .arg(
+            clap::Arg::new("website")
+                .env("GROONWWW")
+                .long("website-dir"),
+        )
+        .get_matches();
+    let address = args
+        .get_one::<&str>("address")
+        .map_or(, |a| &a);
+    let port = args
+        .get_one::<u16>("port")
+        .map_or(defaults::BACKEND_PORT, |p| *p);
     let wwwroot = std::env::var("WWWROOT").expect("set WWWROOT");
     let templates = std::env::var("TEMPLATES").expect("set TEMPLATES");
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
@@ -40,7 +70,7 @@ async fn serve_files(
     _req: actix_web::HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
-) -> Result<HttpResponse, templating::GroonError>{
+) -> Result<HttpResponse, templating::GroonError> {
     let mut relpath = path::PathBuf::new();
     relpath.push(state.root_path.clone());
     let Ok(path) = PathBuf::from_str(&path);
@@ -53,15 +83,14 @@ async fn serve_files(
         Some("html") => {
             let tmp = templating::process_html_file(relpath, &state.templates).await?;
             Ok(HttpResponse::Ok().body(tmp))
-        },
+        }
         Some("md") => {
             let tmp = templating::process_markdown_file(relpath).await?;
             Ok(HttpResponse::Ok().body(tmp))
-        },
+        }
         _ => {
             let file = tokio::fs::read(relpath).await?;
             Ok(HttpResponse::Ok().body(file))
         }
     }
 }
-
