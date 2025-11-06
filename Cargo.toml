@@ -11,4 +11,4 @@ log = "^0.4"
 tokio-stream = "0.1.17"
 markdown = "1.0.0"
 thiserror = "2.0.17"
-clap = "4.5.51"
+clap = { version = "4.5.51", features = [ "env" ]}
