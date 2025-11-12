@@ -2,8 +2,10 @@ use actix_web::{App, HttpResponse, HttpServer, Responder, get, middleware::Logge
 use log::{debug, info, warn};
 use std::path::{self, PathBuf};
 use std::str::FromStr;
+use std::sync::Arc;
+use std::time::SystemTime;
 mod templating;
-
+mod cache;
 const DEFAULT_ADRESS: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8080;
 
@@ -75,10 +77,12 @@ fn parse_args<'a>() -> Args<'a> {
 async fn main() -> std::io::Result<()> {
     let args = parse_args();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
+    let cache = web::Data::new(cache::PageCache::new());
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .wrap(Logger::new("%a ${User-Agent}i"))
+            .app_data(cache.clone())
             .app_data(web::Data::new(AppState {
                 root_path: path::PathBuf::from_str(&args.wwwroot)
                     .unwrap()
@@ -101,6 +105,7 @@ async fn serve_files(
     _req: actix_web::HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
+    cache: web::Data<cache::PageCache>
 ) -> Result<HttpResponse, templating::GroonError> {
     let mut relpath = path::PathBuf::new();
     relpath.push(state.root_path.clone());
@@ -112,8 +117,26 @@ async fn serve_files(
     }
     match relpath.extension().and_then(|ex| ex.to_str()) {
         Some("html") => {
-            let tmp = templating::process_html_file(relpath, &state.templates).await?;
-            Ok(HttpResponse::Ok().body(tmp))
+            if let Some(page_last_access) = cache.get_page_last_access(&relpath) {
+                let meta = tokio::fs::metadata(&relpath).await?;
+                let modified_time = match meta.modified() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::error!("{e}");
+                        SystemTime::now()
+                    }
+                };
+                if page_last_access <= modified_time {
+                    let tmp = templating::process_html_file(relpath.clone(), &state.templates).await?;
+                    cache.update_page(relpath.clone(), |p| {
+                        p.last_access = SystemTime::now();
+                        p.contents = Arc::from(tmp.clone());
+                    });
+                }
+                Ok(HttpResponse::Ok().body(cache.get_page_contents(&relpath).unwrap().as_str()))
+            } else {
+                Ok(HttpResponse::Ok().body("hujhuj"))
+            }
         }
         Some("md") => {
             let tmp = templating::process_markdown_file(relpath).await?;

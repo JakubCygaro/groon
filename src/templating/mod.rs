@@ -3,13 +3,15 @@ use std::path::PathBuf;
 use std::str::FromStr;
 mod errors;
 pub use errors::{GroonError, TagParseError};
+
+const GROON_TAG_START: &str = "<?groon ";
+const COMMENT_TAG_START: &str = "<!--";
+const COMMENT_TAG_END: &str = "-->";
+
 pub enum GroonTag {
     Insert(PathBuf),
 }
 pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String, GroonError> {
-    const GROON_TAG_START: &str = "<?groon ";
-    const COMMENT_TAG_START: &str = "<!--";
-    const COMMENT_TAG_END: &str = "-->";
     let content = tokio::fs::read_to_string(path.clone()).await?;
     let mut ret = String::with_capacity(content.len());
     let mut slice = &content[..];
