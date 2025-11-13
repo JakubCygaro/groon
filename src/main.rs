@@ -1,9 +1,10 @@
 use actix_web::{App, HttpResponse, HttpServer, Responder, get, middleware::Logger, web};
+use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
 use std::path::{self, PathBuf};
 use std::str::FromStr;
-use tokio::sync::Mutex;
 use std::time::SystemTime;
+use tokio::sync::Mutex;
 
 use self::cache::PageInfo;
 mod cache;
@@ -116,41 +117,8 @@ async fn serve_files(
     match relpath.extension().and_then(|ex| ex.to_str()) {
         Some("html") => {
             let mut cache = state.cache.lock().await;
-            if let Some(page_last_access) =
-                cache.get_page(&relpath).map(|p| p.last_access.to_owned())
-            {
-                let meta = tokio::fs::metadata(&relpath).await?;
-                let modified_time = match meta.modified() {
-                    Ok(m) => m,
-                    Err(e) => {
-                        log::error!("{e}");
-                        SystemTime::now()
-                    }
-                };
-                let body = if page_last_access <= modified_time {
-                    let tmp =
-                        templating::process_html_file(relpath.clone(), &state.templates).await?;
-                    cache.update_page(relpath.clone(), |p| {
-                        p.last_access = SystemTime::now();
-                        p.contents = tmp.content.clone();
-                        p.dependencies = tmp.dependencies.clone();
-                    });
-                    tmp.content
-                } else {
-                    cache.get_page(&relpath).unwrap().contents.to_owned()
-                };
-                Ok(HttpResponse::Ok().body(body))
-            } else {
-                let tmp =
-                    templating::process_html_file(relpath.clone(), &state.templates).await?;
-                let page_info = PageInfo {
-                    contents: tmp.content.clone(),
-                    dependencies: vec![],
-                    last_access: SystemTime::now(),
-                };
-                cache.add_page(relpath, page_info);
-                Ok(HttpResponse::Ok().body(tmp.content))
-            }
+            let tmp = templating::process_html_file(relpath.clone(), &state.templates, &mut(*cache)).await?;
+            Ok(HttpResponse::Ok().body(tmp.content))
         }
         Some("md") => {
             let mut cache = state.cache.lock().await;
@@ -166,8 +134,7 @@ async fn serve_files(
                     }
                 };
                 let body = if page_last_access <= modified_time {
-                    let tmp =
-                        templating::process_markdown_file(relpath.clone()).await?;
+                    let tmp = templating::process_markdown_file(relpath.clone()).await?;
                     cache.update_page(relpath.clone(), |p| {
                         p.last_access = SystemTime::now();
                         p.contents = tmp.clone();
@@ -178,8 +145,7 @@ async fn serve_files(
                 };
                 Ok(HttpResponse::Ok().body(body))
             } else {
-                let tmp =
-                    templating::process_markdown_file(relpath.clone()).await?;
+                let tmp = templating::process_markdown_file(relpath.clone()).await?;
                 let page_info = PageInfo {
                     contents: tmp.clone(),
                     dependencies: vec![],

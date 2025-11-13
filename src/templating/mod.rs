@@ -1,8 +1,12 @@
 use log::warn;
 use std::path::PathBuf;
 use std::str::FromStr;
+use futures::stream::{self, StreamExt};
 mod errors;
 pub use errors::{GroonError, TagParseError};
+use std::time::SystemTime;
+
+use crate::cache;
 
 const GROON_TAG_START: &str = "<?groon ";
 const COMMENT_TAG_START: &str = "<!--";
@@ -14,10 +18,24 @@ pub enum GroonTag {
 
 pub struct HTMLFile {
     pub content: String,
-    pub dependencies: Vec<PathBuf>,
+    dependencies: Vec<PathBuf>,
 }
 
-pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<HTMLFile, GroonError> {
+pub async fn process_html_file(
+    path: PathBuf,
+    temps: &PathBuf,
+    cache: &mut cache::PageCache,
+) -> Result<HTMLFile, GroonError> {
+    if let Some(deps) = cache.get_page(&path).map(|p| p.dependencies.clone()) {
+        return process_html_with_deps(deps, cache).await?;
+    }
+    // let page_last_access = cache.get_page(&d).map(|p| p.last_access).unwrap_or(modified_time);
+    // if page_last_access <= modified_time {
+    //     std::io::Result::Ok(Option::Some(d))
+    // } else {
+    //     std::io::Result::Ok(Option::None)
+    // }
+
     let content = tokio::fs::read_to_string(path.clone()).await?;
     let mut dependencies: Vec<PathBuf> = vec![];
     let mut ret = String::with_capacity(content.len());
@@ -53,7 +71,9 @@ pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<HTMLFil
                 }
                 match template_path.extension().and_then(|ex| ex.to_str()) {
                     Some("html") => {
-                        let ret = Box::pin(process_html_file(temps.join(&template_path), temps)).await?;
+                        let ret =
+                            Box::pin(process_html_file(temps.join(&template_path), temps, cache))
+                                .await?;
                         dependencies.push(template_path.clone());
                         ret
                     }
@@ -85,6 +105,65 @@ pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<HTMLFil
         dependencies,
     })
 }
+async fn process_html_with_deps(deps: Vec<PathBuf>, cache: &mut cache::PageCache) {
+        let deps_mod_time = stream::iter(deps
+            .into_iter())
+            .map(|d| async move {
+                let meta = tokio::fs::metadata(&d).await?;
+                let modified_time = match meta.modified() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::error!("{e}");
+                        SystemTime::now()
+                    }
+                };
+                std::io::Result::Ok((d, modified_time))
+            })
+            .filter_map(|r| async move {
+                match r.await {
+                    Ok(dmt) => Some(dmt),
+                    _ => None
+                }
+            })
+            .collect::<Vec<_>>().await;
+        for (dep_path, mt) in deps_mod_time {
+            let page_last_access = cache
+                .get_page(&dep_path)
+                .map(|p| p.last_access)
+                .unwrap_or(mt);
+            if page_last_access <= mt {
+                let tmp = match dep_path.extension().and_then(|ex| ex.to_str()) {
+                    Some("html") => {
+                        let ret =
+                            Box::pin(process_html_file(temps.join(&dep_path), temps, cache))
+                                .await?;
+                        ret
+                    }
+                    Some("md") => {
+                        let content = process_markdown_file(temps.join(&dep_path)).await?;
+                        HTMLFile{
+                            content,
+                            dependencies: vec![],
+                        }
+                    }
+                    _ => {
+                        warn!("Invalid insert template file type");
+                        return Ok(HTMLFile {
+                            content: "".to_owned(),
+                            dependencies: vec![],
+                        });
+                    }
+                };
+                cache.update_page(dep_path.clone(), |p| {
+                    p.last_access = SystemTime::now();
+                    p.contents = tmp.content.clone();
+                    p.dependencies= tmp.dependencies.clone();
+                });
+            } else {
+            }
+        }
+
+}
 pub async fn process_markdown_file(path: PathBuf) -> Result<String, GroonError> {
     let md = tokio::fs::read_to_string(path).await?;
     Ok(markdown::to_html_with_options(&md, &markdown::Options::gfm()).unwrap())
@@ -110,3 +189,5 @@ fn parse_groon_tag(tag_str: &str) -> Result<GroonTag, TagParseError> {
         _ => Err(TagParseError::Unrecognized(kwd.to_string())),
     }
 }
+
+async fn update_dependencies
