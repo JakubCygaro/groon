@@ -27,15 +27,8 @@ pub async fn process_html_file(
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
     if let Some(deps) = cache.get_page(&path).map(|p| p.dependencies.clone()) {
-        return process_html_with_deps(deps, cache).await?;
+        return process_html_with_deps(deps, cache).await;
     }
-    // let page_last_access = cache.get_page(&d).map(|p| p.last_access).unwrap_or(modified_time);
-    // if page_last_access <= modified_time {
-    //     std::io::Result::Ok(Option::Some(d))
-    // } else {
-    //     std::io::Result::Ok(Option::None)
-    // }
-
     let content = tokio::fs::read_to_string(path.clone()).await?;
     let mut dependencies: Vec<PathBuf> = vec![];
     let mut ret = String::with_capacity(content.len());
@@ -105,7 +98,7 @@ pub async fn process_html_file(
         dependencies,
     })
 }
-async fn process_html_with_deps(deps: Vec<PathBuf>, cache: &mut cache::PageCache) {
+async fn process_html_with_deps(deps: Vec<PathBuf>, temps: &PathBuf, cache: &mut cache::PageCache) -> Result<HTMLFile, GroonError> {
         let deps_mod_time = stream::iter(deps
             .into_iter())
             .map(|d| async move {
@@ -159,7 +152,12 @@ async fn process_html_with_deps(deps: Vec<PathBuf>, cache: &mut cache::PageCache
                     p.contents = tmp.content.clone();
                     p.dependencies= tmp.dependencies.clone();
                 });
+                return Ok(HTMLFile {
+                    content: tmp.content,
+                    dependencies: tmp.dependencies
+                });
             } else {
+                todo!()
             }
         }
 
@@ -189,5 +187,3 @@ fn parse_groon_tag(tag_str: &str) -> Result<GroonTag, TagParseError> {
         _ => Err(TagParseError::Unrecognized(kwd.to_string())),
     }
 }
-
-async fn update_dependencies
