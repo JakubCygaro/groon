@@ -2,16 +2,19 @@ use actix_web::{App, HttpResponse, HttpServer, Responder, get, middleware::Logge
 use log::{debug, info, warn};
 use std::path::{self, PathBuf};
 use std::str::FromStr;
-use std::sync::Arc;
+use tokio::sync::Mutex;
 use std::time::SystemTime;
-mod templating;
+
+use self::cache::PageInfo;
 mod cache;
+mod templating;
 const DEFAULT_ADRESS: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8080;
 
 struct AppState {
     root_path: path::PathBuf,
     templates: path::PathBuf,
+    cache: Mutex<cache::PageCache>,
 }
 
 struct Args<'a> {
@@ -53,9 +56,7 @@ fn parse_args<'a>() -> Args<'a> {
     let address = args
         .get_one::<&str>("address")
         .map_or(DEFAULT_ADRESS, |a| a);
-    let port = args
-        .get_one::<u16>("port")
-        .map_or(DEFAULT_PORT, |p| *p);
+    let port = args.get_one::<u16>("port").map_or(DEFAULT_PORT, |p| *p);
     let wwwroot = args
         .get_one::<String>("wwwroot")
         .expect("wwwroot not provided")
@@ -68,21 +69,18 @@ fn parse_args<'a>() -> Args<'a> {
         address,
         port,
         wwwroot,
-        templates
+        templates,
     }
 }
-
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     let args = parse_args();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
-    let cache = web::Data::new(cache::PageCache::new());
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .wrap(Logger::new("%a ${User-Agent}i"))
-            .app_data(cache.clone())
             .app_data(web::Data::new(AppState {
                 root_path: path::PathBuf::from_str(&args.wwwroot)
                     .unwrap()
@@ -92,6 +90,7 @@ async fn main() -> std::io::Result<()> {
                     .unwrap()
                     .canonicalize()
                     .unwrap(),
+                cache: Mutex::new(cache::PageCache::new()),
             }))
             .service(serve_files)
     })
@@ -105,7 +104,6 @@ async fn serve_files(
     _req: actix_web::HttpRequest,
     path: web::Path<String>,
     state: web::Data<AppState>,
-    cache: web::Data<cache::PageCache>
 ) -> Result<HttpResponse, templating::GroonError> {
     let mut relpath = path::PathBuf::new();
     relpath.push(state.root_path.clone());
@@ -117,7 +115,10 @@ async fn serve_files(
     }
     match relpath.extension().and_then(|ex| ex.to_str()) {
         Some("html") => {
-            if let Some(page_last_access) = cache.get_page_last_access(&relpath) {
+            let mut cache = state.cache.lock().await;
+            if let Some(page_last_access) =
+                cache.get_page(&relpath).map(|p| p.last_access.to_owned())
+            {
                 let meta = tokio::fs::metadata(&relpath).await?;
                 let modified_time = match meta.modified() {
                     Ok(m) => m,
@@ -126,21 +127,67 @@ async fn serve_files(
                         SystemTime::now()
                     }
                 };
-                if page_last_access <= modified_time {
-                    let tmp = templating::process_html_file(relpath.clone(), &state.templates).await?;
+                let body = if page_last_access <= modified_time {
+                    let tmp =
+                        templating::process_html_file(relpath.clone(), &state.templates).await?;
                     cache.update_page(relpath.clone(), |p| {
                         p.last_access = SystemTime::now();
-                        p.contents = Arc::from(tmp.clone());
+                        p.contents = tmp.content.clone();
+                        p.dependencies = tmp.dependencies.clone();
                     });
-                }
-                Ok(HttpResponse::Ok().body(cache.get_page_contents(&relpath).unwrap().as_str()))
+                    tmp.content
+                } else {
+                    cache.get_page(&relpath).unwrap().contents.to_owned()
+                };
+                Ok(HttpResponse::Ok().body(body))
             } else {
-                Ok(HttpResponse::Ok().body("hujhuj"))
+                let tmp =
+                    templating::process_html_file(relpath.clone(), &state.templates).await?;
+                let page_info = PageInfo {
+                    contents: tmp.content.clone(),
+                    dependencies: vec![],
+                    last_access: SystemTime::now(),
+                };
+                cache.add_page(relpath, page_info);
+                Ok(HttpResponse::Ok().body(tmp.content))
             }
         }
         Some("md") => {
-            let tmp = templating::process_markdown_file(relpath).await?;
-            Ok(HttpResponse::Ok().body(tmp))
+            let mut cache = state.cache.lock().await;
+            if let Some(page_last_access) =
+                cache.get_page(&relpath).map(|p| p.last_access.to_owned())
+            {
+                let meta = tokio::fs::metadata(&relpath).await?;
+                let modified_time = match meta.modified() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        log::error!("{e}");
+                        SystemTime::now()
+                    }
+                };
+                let body = if page_last_access <= modified_time {
+                    let tmp =
+                        templating::process_markdown_file(relpath.clone()).await?;
+                    cache.update_page(relpath.clone(), |p| {
+                        p.last_access = SystemTime::now();
+                        p.contents = tmp.clone();
+                    });
+                    tmp
+                } else {
+                    cache.get_page(&relpath).unwrap().contents.to_owned()
+                };
+                Ok(HttpResponse::Ok().body(body))
+            } else {
+                let tmp =
+                    templating::process_markdown_file(relpath.clone()).await?;
+                let page_info = PageInfo {
+                    contents: tmp.clone(),
+                    dependencies: vec![],
+                    last_access: SystemTime::now(),
+                };
+                cache.add_page(relpath, page_info);
+                Ok(HttpResponse::Ok().body(tmp))
+            }
         }
         _ => {
             let file = tokio::fs::read(relpath).await?;

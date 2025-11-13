@@ -11,13 +11,22 @@ const COMMENT_TAG_END: &str = "-->";
 pub enum GroonTag {
     Insert(PathBuf),
 }
-pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String, GroonError> {
+
+pub struct HTMLFile {
+    pub content: String,
+    pub dependencies: Vec<PathBuf>,
+}
+
+pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<HTMLFile, GroonError> {
     let content = tokio::fs::read_to_string(path.clone()).await?;
+    let mut dependencies: Vec<PathBuf> = vec![];
     let mut ret = String::with_capacity(content.len());
     let mut slice = &content[..];
     while let Some(idx) = slice.find(GROON_TAG_START) {
         if let Some(comment_start) = slice.find(COMMENT_TAG_START) {
-            let comment_end = slice.find(COMMENT_TAG_END).ok_or(GroonError::UnclosedComment)?;
+            let comment_end = slice
+                .find(COMMENT_TAG_END)
+                .ok_or(GroonError::UnclosedComment)?;
             if comment_start < idx && comment_end > idx {
                 ret.push_str(&slice[..comment_start]);
                 slice = &slice[comment_end + COMMENT_TAG_END.len()..];
@@ -37,27 +46,44 @@ pub async fn process_html_file(path: PathBuf, temps: &PathBuf) -> Result<String,
                         "Self referential template {}",
                         template_path.to_str().unwrap_or("")
                     );
-                    return Ok("".to_string());
+                    return Ok(HTMLFile {
+                        content: "".to_owned(),
+                        dependencies: vec![],
+                    });
                 }
                 match template_path.extension().and_then(|ex| ex.to_str()) {
                     Some("html") => {
-                        Box::pin(process_html_file(temps.join(template_path), temps)).await?
+                        let ret = Box::pin(process_html_file(temps.join(&template_path), temps)).await?;
+                        dependencies.push(template_path.clone());
+                        ret
                     }
                     Some("md") => {
-                        process_markdown_file(temps.join(template_path)).await?
+                        let content = process_markdown_file(temps.join(&template_path)).await?;
+                        dependencies.push(template_path.clone());
+                        HTMLFile {
+                            content,
+                            dependencies: vec![],
+                        }
                     }
                     _ => {
                         warn!("Invalid insert template file type");
-                        return Ok("".to_string());
+                        return Ok(HTMLFile {
+                            content: "".to_owned(),
+                            dependencies: vec![],
+                        });
                     }
                 }
             }
         };
-        ret.push_str(&tag_expand);
+        ret.push_str(&tag_expand.content);
+        dependencies.extend(tag_expand.dependencies);
         slice = &slice[tag_end + 1..];
     }
     ret.push_str(slice);
-    Ok(ret)
+    Ok(HTMLFile {
+        content: ret,
+        dependencies,
+    })
 }
 pub async fn process_markdown_file(path: PathBuf) -> Result<String, GroonError> {
     let md = tokio::fs::read_to_string(path).await?;
