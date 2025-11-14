@@ -122,38 +122,8 @@ async fn serve_files(
         }
         Some("md") => {
             let mut cache = state.cache.lock().await;
-            if let Some(page_last_access) =
-                cache.get_page(&relpath).map(|p| p.last_access.to_owned())
-            {
-                let meta = tokio::fs::metadata(&relpath).await?;
-                let modified_time = match meta.modified() {
-                    Ok(m) => m,
-                    Err(e) => {
-                        log::error!("{e}");
-                        SystemTime::now()
-                    }
-                };
-                let body = if page_last_access <= modified_time {
-                    let tmp = templating::process_markdown_file(relpath.clone()).await?;
-                    cache.update_page(relpath.clone(), |p| {
-                        p.last_access = SystemTime::now();
-                        p.contents = tmp.clone();
-                    });
-                    tmp
-                } else {
-                    cache.get_page(&relpath).unwrap().contents.to_owned()
-                };
-                Ok(HttpResponse::Ok().body(body))
-            } else {
-                let tmp = templating::process_markdown_file(relpath.clone()).await?;
-                let page_info = PageInfo {
-                    contents: tmp.clone(),
-                    dependencies: vec![],
-                    last_access: SystemTime::now(),
-                };
-                cache.add_page(relpath, page_info);
-                Ok(HttpResponse::Ok().body(tmp))
-            }
+            let tmp = templating::process_markdown_file(state.templates.join(relpath), &mut(*cache)).await?;
+            Ok(HttpResponse::Ok().body(tmp))
         }
         _ => {
             let file = tokio::fs::read(relpath).await?;

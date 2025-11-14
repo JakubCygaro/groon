@@ -1,8 +1,8 @@
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::path::PathBuf;
-use std::sync::Mutex;
 use std::time::SystemTime;
+
+use crate::templating::HTMLFile;
 
 type PageInfoMap = HashMap<PathBuf, PageInfo>;
 
@@ -14,7 +14,7 @@ pub struct PageCache {
 pub struct PageInfo {
     pub contents: String,
     pub dependencies: Vec<PathBuf>,
-    pub last_access: SystemTime,
+    pub last_modified: SystemTime,
 }
 
 impl Default for PageInfo {
@@ -22,8 +22,24 @@ impl Default for PageInfo {
         Self {
             contents: String::from(""),
             dependencies: vec![],
-            last_access: SystemTime::now()
+            last_modified: SystemTime::now()
         }
+    }
+}
+
+impl From<HTMLFile> for PageInfo {
+    fn from(value: HTMLFile) -> Self {
+        Self {
+            contents: value.content,
+            dependencies: value.dependencies,
+            last_modified: SystemTime::now()
+        }
+    }
+}
+
+impl Into<HTMLFile> for PageInfo {
+    fn into(self) -> HTMLFile {
+        HTMLFile { content: self.contents, dependencies: self.dependencies }
     }
 }
 

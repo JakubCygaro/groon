@@ -3,6 +3,7 @@ use actix_web::http::StatusCode;
 use actix_web::HttpResponse;
 use thiserror::Error;
 use std::io;
+use std::path::PathBuf;
 
 #[derive(Debug, Error)]
 pub enum GroonError {
@@ -39,4 +40,8 @@ pub enum TagParseError {
     },
     #[error("Unrecognized tag")]
     Unrecognized(String),
+    #[error("Self referencial template")]
+    SelfRefelercial(PathBuf),
+    #[error("Invalid insert template file type")]
+    InvalidInsertFileType(PathBuf),
 }
