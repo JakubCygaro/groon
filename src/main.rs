@@ -78,6 +78,7 @@ fn parse_args<'a>() -> Args<'a> {
 async fn main() -> std::io::Result<()> {
     let args = parse_args();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
+    let cache = cache::PageCache::new();
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
@@ -91,7 +92,7 @@ async fn main() -> std::io::Result<()> {
                     .unwrap()
                     .canonicalize()
                     .unwrap(),
-                cache: Mutex::new(cache::PageCache::new()),
+                cache: Mutex::new(cache.clone())
             }))
             .service(serve_files)
     })

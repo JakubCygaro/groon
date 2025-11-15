@@ -31,7 +31,7 @@ pub async fn read_html_or_load_from_cache(
         log::debug!("{:?} cache hit", path);
         if !is_outdated(&path, cache).await? {
             let page = cache.get_page(&path).cloned().unwrap();
-            log::debug!("return cached");
+            log::debug!("{:?} return cached", path);
             return Ok(HTMLFile {
                 content: page.contents,
                 dependencies: page.dependencies,

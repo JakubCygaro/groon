@@ -6,6 +6,7 @@ use crate::templating::HTMLFile;
 
 type PageInfoMap = HashMap<PathBuf, PageInfo>;
 
+#[derive(Clone)]
 pub struct PageCache {
     pages: PageInfoMap
 }
@@ -50,9 +51,7 @@ impl PageCache {
         }
     }
     pub fn add_page(&mut self, path: PathBuf, page: PageInfo) -> Option<PageInfo> {
-        let ret = self.pages.insert(path, page);
-        self.print_cache();
-        ret
+        self.pages.insert(path, page)
     }
     pub fn get_page(&self, path: &PathBuf) -> Option<&PageInfo> {
         self.pages.get(path)
