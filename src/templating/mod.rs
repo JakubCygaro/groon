@@ -17,12 +17,15 @@ pub async fn process_html_file(
     temps: &PathBuf,
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
-    if let Some(deps) = cache.get_page(&path).map(|p| p.dependencies.clone()) {
-        log::debug!("with_deps");
+    if let Some(deps) = cache.get_page(&path).map(|p| {
+        log::debug!("dep size {}", p.dependencies.len());
+        p.dependencies.clone()
+    }) {
+        log::debug!("{:?} with_deps", path);
         return process_html_with_deps(path, deps, temps, cache).await;
     } else {
-        log::debug!("flat");
-        let page = parse::read_html_file(path.clone(), temps, cache).await?;
+        log::debug!("{:?} flat", path);
+        let page = parse::read_html_or_load_from_cache(path.clone(), temps, cache).await?;
         Ok(page)
     }
 }
@@ -32,63 +35,34 @@ async fn process_html_with_deps(
     temps: &PathBuf,
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
-    let meta = tokio::fs::metadata(path.clone()).await?;
-    let mut reload_file = meta.modified().unwrap_or(SystemTime::now())
-        >= cache
-            .get_page(&path)
-            .map(|p| p.last_modified)
-            .unwrap_or(SystemTime::now());
-
+    let mut should_reread = false;
     for dep_path in &deps {
-        log::debug!("{:?}", dep_path);
-        match cache.get_page(dep_path).map(|p| p.last_modified) {
-            Some(dep_last_modified) => {
-                log::debug!("cache hit");
-                let meta = tokio::fs::metadata(dep_path).await?;
-                // dep has been modified after last access
-                if meta.modified().unwrap_or(SystemTime::now()) >= dep_last_modified {
-                    log::debug!("reload dep");
-                    let page =
-                        process_html_or_markdown_file(dep_path.clone(), temps, cache).await?;
-                    cache.update_page(dep_path.clone(), |p| {
-                        p.last_modified = SystemTime::now();
-                        p.contents = page.content.clone();
-                        p.dependencies = page.dependencies.clone();
-                    });
-                    reload_file = true;
-                }
-            }
-            None => {
-                log::debug!("cache miss");
-                let html_file = parse::read_html_file(dep_path.clone(), temps, cache).await?;
-                cache.add_page(dep_path.to_owned(), html_file.into());
-            }
-        };
+        log::debug!("dep: {:?}", dep_path);
+        should_reread |= process_html_or_markdown_file(dep_path.clone(), temps, cache).await?;
     }
-    if reload_file {
-        let page = parse::read_html_file(path.clone(), temps, cache).await?;
-        cache.update_page(path, |p| {
+    let page = if should_reread {
+        log::debug!("{:?} reread", path);
+        let read = parse::read_html_file(path.clone(), temps, cache).await?;
+        cache.update_page(path, |p|{
+            p.contents = read.content.clone();
+            p.dependencies = read.dependencies.clone();
             p.last_modified = SystemTime::now();
-            p.dependencies = page.dependencies.clone();
-            p.contents = page.content.clone();
         });
-        Ok(page)
+        read
     } else {
-        let page = cache.get_page(&path).cloned().unwrap();
-        Ok(HTMLFile {
-            content: page.contents,
-            dependencies: page.dependencies,
-        })
-    }
+        log::debug!("{:?} load from cache", path);
+        parse::read_html_or_load_from_cache(path.clone(), temps, cache).await?
+    };
+    Ok(page)
 }
 async fn process_html_or_markdown_file(
     path: PathBuf,
     temps: &PathBuf,
     cache: &mut cache::PageCache,
-) -> Result<HTMLFile, GroonError> {
+) -> Result<bool, GroonError> {
     match path.extension().and_then(|ex| ex.to_str()) {
-        Some("html") => parse::read_html_file(path, temps, cache).await,
-        Some("md") => parse::read_markdown_file(path, cache).await,
+        Some("html") => parse::load_html_to_cache(path, temps, cache).await,
+        Some("md") => parse::load_markdown_to_cache(path, cache).await,
         _ => unreachable!(),
     }
 }
