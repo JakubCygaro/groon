@@ -110,7 +110,7 @@ async fn serve_files(
     relpath.push(state.root_path.clone());
     let Ok(path) = PathBuf::from_str(&path);
     relpath.push(path);
-    debug!("{}", relpath.to_str().unwrap());
+    info!("Requested resource: {}", relpath.to_str().unwrap());
     if !relpath.exists() {
         return Ok(HttpResponse::NotFound().body("<h1> Not Found </h1>"));
     }
