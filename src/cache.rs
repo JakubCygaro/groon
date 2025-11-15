@@ -50,7 +50,9 @@ impl PageCache {
         }
     }
     pub fn add_page(&mut self, path: PathBuf, page: PageInfo) -> Option<PageInfo> {
-        self.pages.insert(path, page)
+        let ret = self.pages.insert(path, page);
+        self.print_cache();
+        ret
     }
     pub fn get_page(&self, path: &PathBuf) -> Option<&PageInfo> {
         self.pages.get(path)
@@ -63,6 +65,13 @@ impl PageCache {
                 f(&mut p);
                 p
             });
+        self.print_cache();
+    }
+    pub fn has_page(&self, path: &PathBuf) -> bool {
+        self.pages.contains_key(path)
+    }
+    fn print_cache(&self) {
+        println!("{:?}", self.pages)
     }
 }
 

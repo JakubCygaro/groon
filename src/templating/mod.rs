@@ -18,14 +18,11 @@ pub async fn process_html_file(
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
     if let Some(deps) = cache.get_page(&path).map(|p| p.dependencies.clone()) {
+        log::debug!("with_deps");
         return process_html_with_deps(path, deps, temps, cache).await;
     } else {
-        let page = parse::read_html_file(path.clone(), &temps, cache).await?;
-        cache.update_page(path, |p| {
-            p.contents = page.content.clone();
-            p.dependencies = page.dependencies.clone();
-            p.last_modified = SystemTime::now();
-        });
+        log::debug!("flat");
+        let page = parse::read_html_file(path.clone(), temps, cache).await?;
         Ok(page)
     }
 }
@@ -43,11 +40,14 @@ async fn process_html_with_deps(
             .unwrap_or(SystemTime::now());
 
     for dep_path in &deps {
+        log::debug!("{:?}", dep_path);
         match cache.get_page(dep_path).map(|p| p.last_modified) {
             Some(dep_last_modified) => {
+                log::debug!("cache hit");
                 let meta = tokio::fs::metadata(dep_path).await?;
                 // dep has been modified after last access
                 if meta.modified().unwrap_or(SystemTime::now()) >= dep_last_modified {
+                    log::debug!("reload dep");
                     let page =
                         process_html_or_markdown_file(dep_path.clone(), temps, cache).await?;
                     cache.update_page(dep_path.clone(), |p| {
@@ -59,6 +59,7 @@ async fn process_html_with_deps(
                 }
             }
             None => {
+                log::debug!("cache miss");
                 let html_file = parse::read_html_file(dep_path.clone(), temps, cache).await?;
                 cache.add_page(dep_path.to_owned(), html_file.into());
             }

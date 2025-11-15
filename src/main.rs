@@ -117,12 +117,12 @@ async fn serve_files(
     match relpath.extension().and_then(|ex| ex.to_str()) {
         Some("html") => {
             let mut cache = state.cache.lock().await;
-            let tmp = templating::process_html_file(relpath.clone(), &state.templates, &mut(*cache)).await?;
+            let tmp = templating::process_html_file(relpath.clone(), &state.templates, &mut cache).await?;
             Ok(HttpResponse::Ok().body(tmp.content))
         }
         Some("md") => {
             let mut cache = state.cache.lock().await;
-            let tmp = templating::process_markdown_file(state.templates.join(relpath), &mut(*cache)).await?;
+            let tmp = templating::process_markdown_file(state.templates.join(relpath), &mut cache).await?;
             Ok(HttpResponse::Ok().body(tmp))
         }
         _ => {

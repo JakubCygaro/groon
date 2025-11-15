@@ -21,19 +21,24 @@ pub async fn read_html_file(
     temps: &PathBuf,
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
-    let meta = tokio::fs::metadata(path.clone()).await?;
-    if meta.modified().unwrap_or(SystemTime::now())
-        < cache
-            .get_page(&path)
-            .map(|p| p.last_modified)
-            .unwrap_or(SystemTime::now())
-    {
-        let page = cache.get_page(&path).cloned().unwrap();
-        return Ok(HTMLFile {
-            content: page.contents,
-            dependencies: page.dependencies,
-        })
+    if cache.has_page(&path) {
+        log::debug!("cache hit");
+        let meta = tokio::fs::metadata(path.clone()).await?;
+        if meta.modified().unwrap_or(SystemTime::now())
+            < cache
+                .get_page(&path)
+                .map(|p| p.last_modified)
+                .unwrap()
+        {
+            let page = cache.get_page(&path).cloned().unwrap();
+            log::debug!("return cached");
+            return Ok(HTMLFile {
+                content: page.contents,
+                dependencies: page.dependencies,
+            })
+        }
     }
+    log::debug!("read html");
 
     let content = tokio::fs::read_to_string(path.clone()).await?;
 
@@ -64,6 +69,11 @@ pub async fn read_html_file(
         slice = &slice[tag_end + 1..];
     }
     ret.push_str(slice);
+    cache.update_page(path, |p| {
+        p.contents = ret.clone();
+        p.dependencies = dependencies.clone();
+        p.last_modified = SystemTime::now();
+    });
     Ok(HTMLFile {
         content: ret,
         dependencies,
@@ -92,12 +102,12 @@ async fn expand_groon_tag(
                 Some("html") => {
                     let html =
                         Box::pin(read_html_file(temps.join(&template_path), temps, cache)).await?;
-                    dependencies.push(template_path.clone());
+                    dependencies.push(temps.join(&template_path).clone());
                     html
                 }
                 Some("md") => {
                     let markdown = read_markdown_file(temps.join(&template_path), cache).await?;
-                    dependencies.push(template_path.clone());
+                    dependencies.push(temps.join(&template_path).clone());
                     markdown
                 }
                 _ => {
