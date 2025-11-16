@@ -23,6 +23,16 @@ async fn is_outdated(path: &PathBuf, cache: &PageCache) -> Result<bool, GroonErr
     Ok(meta.modified()? >= cache.get_page(path).map(|p| p.last_modified).unwrap())
 }
 
+pub async fn read_page_or_load_from_cache(
+    path: PathBuf,
+    temps: &PathBuf,
+    cache: &mut cache::PageCache,
+    root_deps: Option<&HashSet<PathBuf>>,
+) -> Result<HTMLFile, GroonError> {
+
+    todo!()
+}
+
 pub async fn read_html_or_load_from_cache(
     path: PathBuf,
     temps: &PathBuf,
