@@ -43,9 +43,10 @@ async fn process_html_with_deps(
         log::debug!("{:?} reread", path);
         let read = parse::read_html_file(path.clone(), temps, cache, None).await?;
         cache.update_page(path, |p| {
-            p.contents = read.content.clone();
+            p.contents = read.content.clone().into();
             p.dependencies = read.dependencies.clone();
             p.last_modified = SystemTime::now();
+            p.last_accessed = p.last_modified;
         });
         read
     } else {

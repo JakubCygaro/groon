@@ -35,7 +35,7 @@ pub async fn read_html_or_load_from_cache(
             let page = cache.get_page(&path).cloned().unwrap();
             log::debug!("{:?} return cached", path);
             return Ok(HTMLFile {
-                content: page.contents,
+                content: page.contents.expect("cache invalidated"),
                 dependencies: page.dependencies,
             });
         }
@@ -43,9 +43,10 @@ pub async fn read_html_or_load_from_cache(
     log::debug!("cache miss");
     let ret = read_html_file(path.clone(), temps, cache, root_deps).await?;
     cache.update_page(path, |p| {
-        p.contents = ret.content.clone();
+        p.contents = ret.content.clone().into();
         p.dependencies = ret.dependencies.clone();
         p.last_modified = SystemTime::now();
+        p.last_accessed = p.last_modified;
     });
     Ok(HTMLFile {
         content: ret.content,
@@ -62,7 +63,7 @@ pub async fn load_html_to_cache(
         if is_outdated(&path, cache).await? {
             let ret = read_html_file(path.clone(), temps, cache, None).await?;
             cache.update_page(path, |p| {
-                p.contents = ret.content.clone();
+                p.contents = ret.content.clone().into();
                 p.dependencies = ret.dependencies.clone();
                 p.last_modified = SystemTime::now();
             });
@@ -71,7 +72,7 @@ pub async fn load_html_to_cache(
     } else {
         let ret = read_html_file(path.clone(), temps, cache, None).await?;
         cache.update_page(path, |p| {
-            p.contents = ret.content.clone();
+            p.contents = ret.content.clone().into();
             p.dependencies = ret.dependencies.clone();
             p.last_modified = SystemTime::now();
         });
@@ -195,16 +196,18 @@ pub async fn read_markdown_or_load_from_cache(
 ) -> Result<HTMLFile, GroonError> {
     if cache.has_page(&path) && !is_outdated(&path, cache).await? {
         let page = cache.get_page(&path).cloned().unwrap();
+        cache.page_accessed_now(path);
         return Ok(HTMLFile {
-            content: page.contents,
+            content: page.contents.expect("cache invalidated"),
             dependencies: page.dependencies,
         });
     }
     let ret = read_markdown_file(path.clone()).await?;
     cache.update_page(path, |p| {
-        p.contents = ret.content.clone();
+        p.contents = ret.content.clone().into();
         p.dependencies = ret.dependencies.clone();
         p.last_modified = SystemTime::now();
+        p.last_accessed = p.last_modified;
     });
     Ok(HTMLFile {
         content: ret.content,
@@ -219,7 +222,7 @@ pub async fn load_markdown_to_cache(
         if is_outdated(&path, cache).await? {
             let ret = read_markdown_file(path.clone()).await?;
             cache.update_page(path, |p| {
-                p.contents = ret.content.clone();
+                p.contents = ret.content.clone().into();
                 p.dependencies = ret.dependencies.clone();
                 p.last_modified = SystemTime::now();
             });
@@ -228,7 +231,7 @@ pub async fn load_markdown_to_cache(
     } else {
         let ret = read_markdown_file(path.clone()).await?;
         cache.update_page(path, |p| {
-            p.contents = ret.content.clone();
+            p.contents = ret.content.clone().into();
             p.dependencies = ret.dependencies.clone();
             p.last_modified = SystemTime::now();
         });
