@@ -1,5 +1,4 @@
-use futures::stream::{self, StreamExt};
-use log::warn;
+use std::collections::HashSet;
 use std::path::PathBuf;
 mod errors;
 mod parse;
@@ -25,13 +24,13 @@ pub async fn process_html_file(
         return process_html_with_deps(path, deps, temps, cache).await;
     } else {
         log::debug!("{:?} flat", path);
-        let page = parse::read_html_or_load_from_cache(path.clone(), temps, cache).await?;
+        let page = parse::read_html_or_load_from_cache(path.clone(), temps, cache, None).await?;
         Ok(page)
     }
 }
 async fn process_html_with_deps(
     path: PathBuf,
-    deps: Vec<PathBuf>,
+    deps: HashSet<PathBuf>,
     temps: &PathBuf,
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
@@ -42,8 +41,8 @@ async fn process_html_with_deps(
     }
     let page = if should_reread {
         log::debug!("{:?} reread", path);
-        let read = parse::read_html_file(path.clone(), temps, cache).await?;
-        cache.update_page(path, |p|{
+        let read = parse::read_html_file(path.clone(), temps, cache, None).await?;
+        cache.update_page(path, |p| {
             p.contents = read.content.clone();
             p.dependencies = read.dependencies.clone();
             p.last_modified = SystemTime::now();
@@ -51,7 +50,7 @@ async fn process_html_with_deps(
         read
     } else {
         log::debug!("{:?} load from cache", path);
-        parse::read_html_or_load_from_cache(path.clone(), temps, cache).await?
+        parse::read_html_or_load_from_cache(path.clone(), temps, cache, None).await?
     };
     Ok(page)
 }
@@ -69,7 +68,6 @@ async fn process_html_or_markdown_file(
 pub async fn process_markdown_file(
     path: PathBuf,
     cache: &mut cache::PageCache,
-) -> Result<String, GroonError> {
-    let md = tokio::fs::read_to_string(&path).await?;
-    Ok(markdown::to_html_with_options(&md, &markdown::Options::gfm()).unwrap())
+) -> Result<HTMLFile, GroonError> {
+    parse::read_markdown_or_load_from_cache(path, cache).await
 }

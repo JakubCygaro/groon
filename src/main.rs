@@ -1,12 +1,9 @@
-use actix_web::{App, HttpResponse, HttpServer, Responder, get, middleware::Logger, web};
-use futures::stream::{self, StreamExt};
-use log::{debug, info, warn};
+use actix_web::{App, HttpResponse, HttpServer, get, middleware::Logger, web};
+use log::info;
 use std::path::{self, PathBuf};
 use std::str::FromStr;
-use std::time::SystemTime;
 use tokio::sync::Mutex;
 
-use self::cache::PageInfo;
 mod cache;
 mod templating;
 const DEFAULT_ADRESS: &str = "127.0.0.1";
@@ -79,21 +76,23 @@ async fn main() -> std::io::Result<()> {
     let args = parse_args();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
     let cache = cache::PageCache::new();
+    let app_state = AppState {
+        root_path: path::PathBuf::from_str(&args.wwwroot)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        templates: path::PathBuf::from_str(&args.templates)
+            .unwrap()
+            .canonicalize()
+            .unwrap(),
+        cache: Mutex::new(cache),
+    };
+    let app_state = web::Data::new(app_state);
     HttpServer::new(move || {
         App::new()
             .wrap(Logger::default())
             .wrap(Logger::new("%a ${User-Agent}i"))
-            .app_data(web::Data::new(AppState {
-                root_path: path::PathBuf::from_str(&args.wwwroot)
-                    .unwrap()
-                    .canonicalize()
-                    .unwrap(),
-                templates: path::PathBuf::from_str(&args.templates)
-                    .unwrap()
-                    .canonicalize()
-                    .unwrap(),
-                cache: Mutex::new(cache.clone())
-            }))
+            .app_data(app_state.clone())
             .service(serve_files)
     })
     .bind((args.address, args.port))?
@@ -118,13 +117,15 @@ async fn serve_files(
     match relpath.extension().and_then(|ex| ex.to_str()) {
         Some("html") => {
             let mut cache = state.cache.lock().await;
-            let tmp = templating::process_html_file(relpath.clone(), &state.templates, &mut cache).await?;
+            let tmp = templating::process_html_file(relpath.clone(), &state.templates, &mut cache)
+                .await?;
             Ok(HttpResponse::Ok().body(tmp.content))
         }
         Some("md") => {
             let mut cache = state.cache.lock().await;
-            let tmp = templating::process_markdown_file(state.templates.join(relpath), &mut cache).await?;
-            Ok(HttpResponse::Ok().body(tmp))
+            let tmp = templating::process_markdown_file(state.templates.join(relpath), &mut cache)
+                .await?;
+            Ok(HttpResponse::Ok().body(tmp.content))
         }
         _ => {
             let file = tokio::fs::read(relpath).await?;

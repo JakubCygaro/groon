@@ -1,25 +1,24 @@
-use actix_web::http::header::ContentType;
-use actix_web::http::StatusCode;
 use actix_web::HttpResponse;
-use thiserror::Error;
+use actix_web::http::StatusCode;
+use actix_web::http::header::ContentType;
+use std::error::Error;
 use std::io;
 use std::path::PathBuf;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum GroonError {
-    #[error("IO error")]
+    #[error("IO error: {0}")]
     IO(#[from] io::Error),
-    #[error("Premature end of input")]
-    PrematureEnd,
     #[error("Tag parsing error")]
     TagParse(#[from] TagParseError),
-    #[error("Unclosed comment")]
-    UnclosedComment
+    #[error("Tag processing error")]
+    TagProcessing(#[from] TagProcessingError),
 }
 
-
-fn get_groon_error_html(error_msg: &str) -> String {
-    format!(r#"
+fn get_groon_error_html(error_msg: &str, source: &str) -> String {
+    format!(
+        r#"
     <!DOCTYPE html>
     <html>
         <head>
@@ -37,17 +36,23 @@ fn get_groon_error_html(error_msg: &str) -> String {
             <div class="error-box">
                 <h1>Groon error</h1>
                 <p>{error_msg}</p>
+                <p>{source}</p>
             </div>
         </body>
     </html>
-    "#)
+    "#
+    )
 }
 
 impl actix_web::error::ResponseError for GroonError {
     fn error_response(&self) -> actix_web::HttpResponse<actix_web::body::BoxBody> {
+        let source = self
+            .source()
+            .map(|src| src.to_string())
+            .unwrap_or("".to_owned());
         HttpResponse::build(self.status_code())
             .insert_header(ContentType::html())
-            .body(get_groon_error_html(&self.to_string()))
+            .body(get_groon_error_html(&self.to_string(), &source))
     }
     fn status_code(&self) -> actix_web::http::StatusCode {
         StatusCode::INTERNAL_SERVER_ERROR
@@ -55,20 +60,25 @@ impl actix_web::error::ResponseError for GroonError {
 }
 #[derive(Debug, Error)]
 pub enum TagParseError {
-    #[error("Groon tag was empty")]
-    EmptyTag,
-    #[error("No attribute value")]
-    MissingValue{
-        attr: String,
-    },
-    #[error("Unquoted attribute value parameter")]
-    UnquotedValue {
-        attr: String,
-    },
-    #[error("Unrecognized tag")]
-    Unrecognized(String),
-    #[error("Self referencial template")]
+    #[error("Groon tag was empty. File {0}")]
+    EmptyTag(PathBuf),
+    #[error("No value for attribute `{attr:?}`. File: {file:?}")]
+    MissingValue { file: PathBuf, attr: String },
+    #[error("Unquoted value for attribute `{attr:?}`. File: {file:?}")]
+    UnquotedValue { file: PathBuf, attr: String },
+    #[error("Unrecognized tag `{tag:?}`. File: {file:?}")]
+    Unrecognized { file: PathBuf, tag: String },
+    #[error("Invalid insert template file type. File: {file:?}")]
+    InvalidInsertFileType{ file: PathBuf },
+    #[error("Unclosed comment. File {0}")]
+    UnclosedComment(PathBuf),
+    #[error("Premature end of input. File {0}")]
+    PrematureEnd(PathBuf),
+}
+#[derive(Debug, Error)]
+pub enum TagProcessingError {
+    #[error("Self referential template. File: {0} ")]
     SelfRefelercial(PathBuf),
-    #[error("Invalid insert template file type")]
-    InvalidInsertFileType(PathBuf),
+    #[error("Dependency cycle found between {file:?} and {dep:?}")]
+    DependencyCycle{ file: PathBuf, dep: PathBuf },
 }
