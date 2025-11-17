@@ -18,6 +18,8 @@ pub enum ResourcePath {
     Markdown(PathBuf),
 }
 impl ResourcePath {
+    /// try to create a ResourcePath enum with the given path, otherwise just return that path
+    /// wrapped in an Err() variant
     pub fn try_from_path(path: PathBuf) -> Result<Self, PathBuf> {
         let ext = path.extension().and_then(|ex| ex.to_str());
         match ext {
@@ -74,7 +76,8 @@ pub async fn read_resource_or_load_from_cache(
         dependencies: ret.dependencies,
     })
 }
-
+/// ## Return value:
+/// Tells you whether a cache read has occured
 pub async fn load_resource_to_cache(
     resource: ResourcePath,
     temps: &PathBuf,
