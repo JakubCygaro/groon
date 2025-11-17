@@ -196,8 +196,9 @@ async fn expand_groon_tag(
                 }
                 None => Some(&(*dependencies)),
             };
-            let dep_as_resource =
-                ResourcePath::try_from_path(temp_path).expect("invalid dependency file type");
+            let dep_as_resource = ResourcePath::try_from_path(temp_path.clone()).unwrap_or_else(|p|
+                panic!("Cached dependency file of invalid format. File: {:?}", p)
+            );
             Box::pin(read_resource_or_load_from_cache(
                 dep_as_resource,
                 temps,

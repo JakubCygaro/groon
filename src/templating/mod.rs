@@ -37,7 +37,9 @@ async fn process_resource_with_deps(
     for dep_path in &deps {
         log::debug!("dep: {:?}", dep_path);
         let dep_as_resource =
-            ResourcePath::try_from_path(dep_path.clone()).expect("disallowed dependency file type");
+            ResourcePath::try_from_path(dep_path.clone()).unwrap_or_else(|p|
+                panic!("Cached dependency file of invalid format. File: {:?}", p)
+            );
         should_reread |= parse::load_resource_to_cache(dep_as_resource, temps, cache).await?;
     }
     let page = if should_reread {
