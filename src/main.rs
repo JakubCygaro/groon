@@ -114,21 +114,14 @@ async fn serve_files(
     if !relpath.exists() {
         return Ok(HttpResponse::NotFound().body("<h1> Not Found </h1>"));
     }
-    match relpath.extension().and_then(|ex| ex.to_str()) {
-        Some("html") => {
+    match templating::ResourcePath::try_from_path(relpath) {
+        Ok(resource) => {
             let mut cache = state.cache.lock().await;
-            let tmp = templating::process_html_file(relpath.clone(), &state.templates, &mut cache)
-                .await?;
-            Ok(HttpResponse::Ok().body(tmp.content))
+            let html = templating::process_resource(resource, &state.templates, &mut cache).await?;
+            Ok(HttpResponse::Ok().body(html.content))
         }
-        Some("md") => {
-            let mut cache = state.cache.lock().await;
-            let tmp = templating::process_markdown_file(state.templates.join(relpath), &mut cache)
-                .await?;
-            Ok(HttpResponse::Ok().body(tmp.content))
-        }
-        _ => {
-            let file = tokio::fs::read(relpath).await?;
+        Err(path) => {
+            let file = tokio::fs::read(path).await?;
             Ok(HttpResponse::Ok().body(file))
         }
     }

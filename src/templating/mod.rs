@@ -4,32 +4,31 @@ mod errors;
 mod parse;
 use crate::cache;
 pub use errors::GroonError;
-pub use parse::HTMLFile;
+pub use parse::{HTMLFile, ResourcePath};
 use std::time::SystemTime;
 
 pub enum GroonTag {
     Insert(PathBuf),
 }
 
-pub async fn process_html_file(
-    path: PathBuf,
+pub async fn process_resource(
+    resource: ResourcePath,
     temps: &PathBuf,
     cache: &mut cache::PageCache,
 ) -> Result<HTMLFile, GroonError> {
-    if let Some(deps) = cache.get_page(&path).map(|p| {
+    if let Some(deps) = cache.get_page(resource.get_path()).map(|p| {
         log::debug!("dep size {}", p.dependencies.len());
         p.dependencies.clone()
     }) {
-        log::debug!("{:?} with_deps", path);
-        return process_html_with_deps(path, deps, temps, cache).await;
+        log::debug!("{:?} with_deps", resource.get_path());
+        return process_resource_with_deps(resource, deps, temps, cache).await;
     } else {
-        log::debug!("{:?} flat", path);
-        let page = parse::read_html_or_load_from_cache(path.clone(), temps, cache, None).await?;
+        let page = parse::read_resource_or_load_from_cache(resource, temps, cache, None).await?;
         Ok(page)
     }
 }
-async fn process_html_with_deps(
-    path: PathBuf,
+async fn process_resource_with_deps(
+    resource: ResourcePath,
     deps: HashSet<PathBuf>,
     temps: &PathBuf,
     cache: &mut cache::PageCache,
@@ -37,12 +36,14 @@ async fn process_html_with_deps(
     let mut should_reread = false;
     for dep_path in &deps {
         log::debug!("dep: {:?}", dep_path);
-        should_reread |= process_html_or_markdown_file(dep_path.clone(), temps, cache).await?;
+        let dep_as_resource =
+            ResourcePath::try_from_path(dep_path.clone()).expect("disallowed dependency file type");
+        should_reread |= parse::load_resource_to_cache(dep_as_resource, temps, cache).await?;
     }
     let page = if should_reread {
-        log::debug!("{:?} reread", path);
-        let read = parse::read_html_file(path.clone(), temps, cache, None).await?;
-        cache.update_page(path, |p| {
+        log::debug!("{:?} reread", resource.get_path());
+        let read = parse::read_resource(resource.clone(), temps, cache, None).await?;
+        cache.update_page(resource.get_path().to_owned(), |p| {
             p.contents = read.content.clone().into();
             p.dependencies = read.dependencies.clone();
             p.last_modified = SystemTime::now();
@@ -50,25 +51,8 @@ async fn process_html_with_deps(
         });
         read
     } else {
-        log::debug!("{:?} load from cache", path);
-        parse::read_html_or_load_from_cache(path.clone(), temps, cache, None).await?
+        log::debug!("{:?} load from cache", resource.get_path());
+        parse::read_resource_or_load_from_cache(resource, temps, cache, None).await?
     };
     Ok(page)
-}
-async fn process_html_or_markdown_file(
-    path: PathBuf,
-    temps: &PathBuf,
-    cache: &mut cache::PageCache,
-) -> Result<bool, GroonError> {
-    match path.extension().and_then(|ex| ex.to_str()) {
-        Some("html") => parse::load_html_to_cache(path, temps, cache).await,
-        Some("md") => parse::load_markdown_to_cache(path, cache).await,
-        _ => unreachable!(),
-    }
-}
-pub async fn process_markdown_file(
-    path: PathBuf,
-    cache: &mut cache::PageCache,
-) -> Result<HTMLFile, GroonError> {
-    parse::read_markdown_or_load_from_cache(path, cache).await
 }

@@ -69,7 +69,7 @@ pub enum TagParseError {
     #[error("Unrecognized tag `{tag:?}`. File: {file:?}")]
     Unrecognized { file: PathBuf, tag: String },
     #[error("Invalid insert template file type. File: {file:?}")]
-    InvalidInsertFileType{ file: PathBuf },
+    InvalidInsertFileType { file: PathBuf },
     #[error("Unclosed comment. File {0}")]
     UnclosedComment(PathBuf),
     #[error("Premature end of input. File {0}")]
@@ -80,5 +80,5 @@ pub enum TagProcessingError {
     #[error("Self referential template. File: {0} ")]
     SelfRefelercial(PathBuf),
     #[error("Dependency cycle found between {file:?} and {dep:?}")]
-    DependencyCycle{ file: PathBuf, dep: PathBuf },
+    DependencyCycle { file: PathBuf, dep: PathBuf },
 }

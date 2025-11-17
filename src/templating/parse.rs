@@ -12,6 +12,27 @@ const GROON_TAG_START: &str = "<?groon ";
 const COMMENT_TAG_START: &str = "<!--";
 const COMMENT_TAG_END: &str = "-->";
 
+#[derive(Clone)]
+pub enum ResourcePath {
+    Html(PathBuf),
+    Markdown(PathBuf),
+}
+impl ResourcePath {
+    pub fn try_from_path(path: PathBuf) -> Result<Self, PathBuf> {
+        let ext = path.extension().and_then(|ex| ex.to_str());
+        match ext {
+            Some("html") => Ok(Self::Html(path)),
+            Some("md") => Ok(Self::Markdown(path)),
+            _ => Err(path),
+        }
+    }
+    pub fn get_path(&self) -> &PathBuf {
+        match self {
+            ResourcePath::Html(p) => p,
+            ResourcePath::Markdown(p) => p,
+        }
+    }
+}
 #[derive(Clone, Debug)]
 pub struct HTMLFile {
     pub content: String,
@@ -23,27 +44,17 @@ async fn is_outdated(path: &PathBuf, cache: &PageCache) -> Result<bool, GroonErr
     Ok(meta.modified()? >= cache.get_page(path).map(|p| p.last_modified).unwrap())
 }
 
-pub async fn read_page_or_load_from_cache(
-    path: PathBuf,
+pub async fn read_resource_or_load_from_cache(
+    resource: ResourcePath,
     temps: &PathBuf,
     cache: &mut cache::PageCache,
     root_deps: Option<&HashSet<PathBuf>>,
 ) -> Result<HTMLFile, GroonError> {
-
-    todo!()
-}
-
-pub async fn read_html_or_load_from_cache(
-    path: PathBuf,
-    temps: &PathBuf,
-    cache: &mut cache::PageCache,
-    root_deps: Option<&HashSet<PathBuf>>,
-) -> Result<HTMLFile, GroonError> {
-    if cache.has_page(&path) {
-        log::debug!("{:?} cache hit", path);
-        if !is_outdated(&path, cache).await? {
-            let page = cache.get_page(&path).cloned().unwrap();
-            log::debug!("{:?} return cached", path);
+    if cache.has_page(resource.get_path()) {
+        log::debug!("{:?} cache hit", resource.get_path());
+        if !is_outdated(resource.get_path(), cache).await? {
+            let page = cache.get_page(resource.get_path()).cloned().unwrap();
+            log::debug!("{:?} return cached", resource.get_path());
             return Ok(HTMLFile {
                 content: page.contents.expect("cache invalidated"),
                 dependencies: page.dependencies,
@@ -51,8 +62,8 @@ pub async fn read_html_or_load_from_cache(
         }
     }
     log::debug!("cache miss");
-    let ret = read_html_file(path.clone(), temps, cache, root_deps).await?;
-    cache.update_page(path, |p| {
+    let ret = read_resource(resource.clone(), temps, cache, root_deps).await?;
+    cache.update_page(resource.get_path().clone(), |p| {
         p.contents = ret.content.clone().into();
         p.dependencies = ret.dependencies.clone();
         p.last_modified = SystemTime::now();
@@ -64,15 +75,15 @@ pub async fn read_html_or_load_from_cache(
     })
 }
 
-pub async fn load_html_to_cache(
-    path: PathBuf,
+pub async fn load_resource_to_cache(
+    resource: ResourcePath,
     temps: &PathBuf,
     cache: &mut cache::PageCache,
 ) -> Result<bool, GroonError> {
-    if cache.has_page(&path) {
-        if is_outdated(&path, cache).await? {
-            let ret = read_html_file(path.clone(), temps, cache, None).await?;
-            cache.update_page(path, |p| {
+    if cache.has_page(resource.get_path()) {
+        if is_outdated(resource.get_path(), cache).await? {
+            let ret = read_resource(resource.clone(), temps, cache, None).await?;
+            cache.update_page(resource.get_path().to_owned(), |p| {
                 p.contents = ret.content.clone().into();
                 p.dependencies = ret.dependencies.clone();
                 p.last_modified = SystemTime::now();
@@ -80,8 +91,8 @@ pub async fn load_html_to_cache(
             return Ok(true);
         }
     } else {
-        let ret = read_html_file(path.clone(), temps, cache, None).await?;
-        cache.update_page(path, |p| {
+        let ret = read_resource(resource.clone(), temps, cache, None).await?;
+        cache.update_page(resource.get_path().clone(), |p| {
             p.contents = ret.content.clone().into();
             p.dependencies = ret.dependencies.clone();
             p.last_modified = SystemTime::now();
@@ -90,7 +101,17 @@ pub async fn load_html_to_cache(
     }
     Ok(false)
 }
-
+pub async fn read_resource(
+    resource: ResourcePath,
+    temps: &PathBuf,
+    cache: &mut cache::PageCache,
+    root_deps: Option<&HashSet<PathBuf>>,
+) -> Result<HTMLFile, GroonError> {
+    match resource {
+        ResourcePath::Html(path) => read_html_file(path, temps, cache, root_deps).await,
+        ResourcePath::Markdown(path) => read_markdown_file(path).await,
+    }
+}
 pub async fn read_html_file(
     path: PathBuf,
     temps: &PathBuf,
@@ -172,20 +193,15 @@ async fn expand_groon_tag(
                 }
                 None => Some(&(*dependencies)),
             };
-            match template_path.extension().and_then(|ex| ex.to_str()) {
-                Some("html") => {
-                    Box::pin(read_html_or_load_from_cache(
-                        temp_path, temps, cache, root_deps,
-                    ))
-                    .await?
-                }
-                Some("md") => read_markdown_or_load_from_cache(temp_path, cache).await?,
-                _ => {
-                    return Err(GroonError::TagProcessing(
-                        TagProcessingError::SelfRefelercial(template_path),
-                    ));
-                }
-            }
+            let dep_as_resource =
+                ResourcePath::try_from_path(temp_path).expect("invalid dependency file type");
+            Box::pin(read_resource_or_load_from_cache(
+                dep_as_resource,
+                temps,
+                cache,
+                root_deps,
+            ))
+            .await?
         }
     };
     Ok(tag_expand)
@@ -200,55 +216,6 @@ pub async fn read_markdown_file(path: PathBuf) -> Result<HTMLFile, GroonError> {
     })
 }
 
-pub async fn read_markdown_or_load_from_cache(
-    path: PathBuf,
-    cache: &mut cache::PageCache,
-) -> Result<HTMLFile, GroonError> {
-    if cache.has_page(&path) && !is_outdated(&path, cache).await? {
-        let page = cache.get_page(&path).cloned().unwrap();
-        cache.page_accessed_now(path);
-        return Ok(HTMLFile {
-            content: page.contents.expect("cache invalidated"),
-            dependencies: page.dependencies,
-        });
-    }
-    let ret = read_markdown_file(path.clone()).await?;
-    cache.update_page(path, |p| {
-        p.contents = ret.content.clone().into();
-        p.dependencies = ret.dependencies.clone();
-        p.last_modified = SystemTime::now();
-        p.last_accessed = p.last_modified;
-    });
-    Ok(HTMLFile {
-        content: ret.content,
-        dependencies: ret.dependencies,
-    })
-}
-pub async fn load_markdown_to_cache(
-    path: PathBuf,
-    cache: &mut cache::PageCache,
-) -> Result<bool, GroonError> {
-    if cache.has_page(&path) {
-        if is_outdated(&path, cache).await? {
-            let ret = read_markdown_file(path.clone()).await?;
-            cache.update_page(path, |p| {
-                p.contents = ret.content.clone().into();
-                p.dependencies = ret.dependencies.clone();
-                p.last_modified = SystemTime::now();
-            });
-            return Ok(true);
-        }
-    } else {
-        let ret = read_markdown_file(path.clone()).await?;
-        cache.update_page(path, |p| {
-            p.contents = ret.content.clone().into();
-            p.dependencies = ret.dependencies.clone();
-            p.last_modified = SystemTime::now();
-        });
-        return Ok(true);
-    }
-    Ok(false)
-}
 pub fn parse_groon_tag(tag_str: &str, file: &PathBuf) -> Result<GroonTag, TagParseError> {
     let mut spl = tag_str.split('=');
     let Some(kwd) = spl.next() else {
