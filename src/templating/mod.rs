@@ -5,10 +5,10 @@ mod parse;
 use crate::cache;
 pub use errors::GroonError;
 pub use parse::{HTMLFile, ResourcePath};
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 pub enum GroonTag {
-    Insert(PathBuf),
+    Insert(ResourcePath),
 }
 
 pub async fn process_resource(
@@ -46,10 +46,10 @@ async fn process_resource_with_deps(
         log::debug!("{:?} reread", resource.get_path());
         let read = parse::read_resource(resource.clone(), temps, cache, None).await?;
         cache.update_page(resource.get_path().to_owned(), |p| {
-            p.contents = read.content.clone().into();
+            p.contents = read.content.clone();
             p.dependencies = read.dependencies.clone();
             p.last_modified = SystemTime::now();
-            p.last_accessed = p.last_modified;
+            p.last_accessed = Instant::now();
         });
         read
     } else {

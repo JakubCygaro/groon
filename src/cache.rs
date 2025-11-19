@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
+use std::ops::Div;
 use std::path::PathBuf;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::templating::HTMLFile;
 
@@ -8,26 +9,35 @@ type PageInfoMap = HashMap<PathBuf, PageInfo>;
 
 #[derive(Clone)]
 pub struct PageCache {
+    max_size: u64,
+    current_size: u64,
     pages: PageInfoMap,
 }
 
 #[derive(Clone, Debug)]
 pub struct PageInfo {
-    pub contents: Option<String>,
+    pub contents: String,
     pub dependencies: HashSet<PathBuf>,
     pub last_modified: SystemTime,
-    pub last_accessed: SystemTime,
-    pub req_count: u64,
+    pub last_accessed: Instant,
+}
+
+impl PageInfo {
+    fn get_score(&self, now: &Instant) -> u64 {
+        let delta = *now - self.last_accessed;
+        let sz_factor = self.contents.len() as u64 + self.dependencies.len() as u64;
+        let irrelevance_factor = delta.as_secs().min(sz_factor);
+        sz_factor - irrelevance_factor
+    }
 }
 
 impl Default for PageInfo {
     fn default() -> Self {
         Self {
-            contents: String::from("").into(),
+            contents: String::from(""),
             dependencies: HashSet::new(),
             last_modified: SystemTime::now(),
-            last_accessed: SystemTime::now(),
-            req_count: 0,
+            last_accessed: Instant::now(),
         }
     }
 }
@@ -35,11 +45,10 @@ impl Default for PageInfo {
 impl From<HTMLFile> for PageInfo {
     fn from(value: HTMLFile) -> Self {
         Self {
-            contents: value.content.into(),
+            contents: value.content,
             dependencies: value.dependencies,
             last_modified: SystemTime::now(),
-            last_accessed: SystemTime::now(),
-            req_count: 0,
+            last_accessed: Instant::now(),
         }
     }
 }
@@ -47,20 +56,25 @@ impl From<HTMLFile> for PageInfo {
 impl From<PageInfo> for HTMLFile {
     fn from(value: PageInfo) -> Self {
         Self {
-            content: value.contents.unwrap_or("".to_owned()),
+            content: value.contents,
             dependencies: value.dependencies,
         }
     }
 }
 
 impl PageCache {
-    pub fn new() -> Self {
+    pub fn new(max_size: u64) -> Self {
         Self {
+            max_size,
+            current_size: 0,
             pages: PageInfoMap::new(),
         }
     }
     pub fn add_page(&mut self, path: PathBuf, page: PageInfo) -> Option<PageInfo> {
-        self.pages.insert(path, page)
+        self.current_size += page.contents.len() as u64;
+        let old = self.pages.insert(path, page);
+        self.cull();
+        old
     }
     pub fn get_page(&self, path: &PathBuf) -> Option<&PageInfo> {
         self.pages.get(path)
@@ -69,13 +83,14 @@ impl PageCache {
         self.pages.entry(path).and_modify(&f).or_insert_with(|| {
             let mut p = PageInfo::default();
             f(&mut p);
+            self.current_size += p.contents.len() as u64;
             p
         });
+        self.cull();
     }
     pub fn page_accessed_now(&mut self, path: PathBuf) {
         self.update_page(path, |p| {
-            p.last_accessed = SystemTime::now();
-            p.req_count += 1;
+            p.last_accessed = Instant::now();
         });
     }
     pub fn has_page(&self, path: &PathBuf) -> bool {
@@ -83,5 +98,36 @@ impl PageCache {
     }
     fn print_cache(&self) {
         println!("{:?}", self.pages.keys())
+    }
+    fn cull(&mut self) {
+        if self.current_size <= self.max_size {
+            return;
+        }
+        log::debug!("performing cache cull");
+        let now = Instant::now();
+        let mut over: i64 = (self.current_size - self.max_size).try_into().unwrap();
+        log::debug!("cache contents {over} over the limit of {} bytes", self.max_size);
+        let mut scored = self
+            .pages
+            .iter()
+            .map(|(p, page)| (p.to_owned(), page.get_score(&now), page.contents.len()))
+            .collect::<Vec<_>>();
+        scored.sort_by(|a, b| a.1.cmp(&b.1));
+        let mut freed = 0;
+        let to_remove = scored
+            .into_iter()
+            .take_while(|(_, _, sz)| {
+                let test = over >= 0;
+                over -= *sz as i64;
+                freed += *sz as u64;
+                test
+            })
+            .map(|(p, _, _)| p)
+            .collect::<Vec<_>>();
+        log::debug!("to_remove {:?}", to_remove);
+        for path in to_remove {
+            self.pages.remove(&path);
+        }
+        self.current_size -= freed;
     }
 }

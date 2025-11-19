@@ -8,6 +8,7 @@ mod cache;
 mod templating;
 const DEFAULT_ADRESS: &str = "127.0.0.1";
 const DEFAULT_PORT: u16 = 8080;
+const DEFAULT_MAX_CACHE: u64 = 1_000_000;
 
 struct AppState {
     root_path: path::PathBuf,
@@ -20,6 +21,55 @@ struct Args<'a> {
     port: u16,
     wwwroot: String,
     templates: String,
+    cache_size: u64,
+}
+
+#[derive(Debug)]
+struct ArgumentParseError {
+    msg: String,
+}
+impl From<&str> for ArgumentParseError {
+    fn from(value: &str) -> Self {
+        Self {
+            msg: value.to_owned(),
+        }
+    }
+}
+impl From<String> for ArgumentParseError {
+    fn from(value: String) -> Self {
+        Self { msg: value }
+    }
+}
+impl std::fmt::Display for ArgumentParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Argument parse error: {}", self.msg)
+    }
+}
+impl std::error::Error for ArgumentParseError {}
+
+fn parse_cache_size(raw: &str) -> Result<u64, Box<dyn std::error::Error>> {
+    if let Some(first_char) = raw.find(|c: char| c.is_alphabetic()) {
+        let num_part = &raw[..first_char];
+        if num_part.is_empty() {
+            return Err(Box::new(ArgumentParseError::from(
+                "Cache size must begin with a number",
+            )));
+        }
+        let size = num_part.parse::<u64>()?;
+        let unit_part = &raw[first_char..];
+        let unit = match unit_part {
+            "K" | "k" => Ok(1_000u64),
+            "M" | "m" => Ok(1_000_000u64),
+            "G" | "g" => Ok(1_000_000_000u64),
+            _ => Err(ArgumentParseError::from(format!(
+                "Unknown cache size unit `{unit_part}`"
+            ))),
+        }?;
+        Ok(size * unit)
+    } else {
+        let size = raw.parse::<u64>()?;
+        Ok(size)
+    }
 }
 
 fn parse_args<'a>() -> Args<'a> {
@@ -50,6 +100,12 @@ fn parse_args<'a>() -> Args<'a> {
                 .long("wwwroot-dir")
                 .required(true),
         )
+        .arg(
+            clap::Arg::new("max-cache")
+                .env("GROONMAXCACHE")
+                .long("max-cache")
+                .required(false),
+        )
         .get_matches();
     let address = args
         .get_one::<&str>("address")
@@ -63,11 +119,24 @@ fn parse_args<'a>() -> Args<'a> {
         .get_one::<String>("templates")
         .expect("templates directory not provided")
         .to_owned();
+    let max_cache = args
+        .get_one::<String>("max-cache")
+        .map(|raw| parse_cache_size(raw))
+        .map(|r| match r {
+            Ok(sz) => sz,
+            Err(e) => {
+                log::error!("Error while parsing max cache size parameter: {e}");
+                DEFAULT_MAX_CACHE
+            }
+        })
+        .unwrap_or(DEFAULT_MAX_CACHE)
+        .to_owned();
     Args {
         address,
         port,
         wwwroot,
         templates,
+        cache_size: max_cache,
     }
 }
 
@@ -75,7 +144,8 @@ fn parse_args<'a>() -> Args<'a> {
 async fn main() -> std::io::Result<()> {
     let args = parse_args();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
-    let cache = cache::PageCache::new();
+    let cache = cache::PageCache::new(args.cache_size);
+    log::info!("Using cache of size {}", args.cache_size);
     let app_state = AppState {
         root_path: path::PathBuf::from_str(&args.wwwroot)
             .unwrap()

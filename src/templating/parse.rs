@@ -6,6 +6,7 @@ use log::*;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::time::Instant;
 use std::time::SystemTime;
 
 const GROON_TAG_START: &str = "<?groon ";
@@ -56,9 +57,10 @@ pub async fn read_resource_or_load_from_cache(
         log::debug!("{:?} cache hit", resource.get_path());
         if !is_outdated(resource.get_path(), cache).await? {
             let page = cache.get_page(resource.get_path()).cloned().unwrap();
+            cache.page_accessed_now(resource.get_path().to_owned());
             log::debug!("{:?} return cached", resource.get_path());
             return Ok(HTMLFile {
-                content: page.contents.expect("cache invalidated"),
+                content: page.contents,
                 dependencies: page.dependencies,
             });
         }
@@ -66,10 +68,10 @@ pub async fn read_resource_or_load_from_cache(
     log::debug!("cache miss");
     let ret = read_resource(resource.clone(), temps, cache, root_deps).await?;
     cache.update_page(resource.get_path().clone(), |p| {
-        p.contents = ret.content.clone().into();
+        p.contents = ret.content.clone();
         p.dependencies = ret.dependencies.clone();
         p.last_modified = SystemTime::now();
-        p.last_accessed = p.last_modified;
+        p.last_accessed = Instant::now();
     });
     Ok(HTMLFile {
         content: ret.content,
@@ -87,7 +89,7 @@ pub async fn load_resource_to_cache(
         if is_outdated(resource.get_path(), cache).await? {
             let ret = read_resource(resource.clone(), temps, cache, None).await?;
             cache.update_page(resource.get_path().to_owned(), |p| {
-                p.contents = ret.content.clone().into();
+                p.contents = ret.content.clone();
                 p.dependencies = ret.dependencies.clone();
                 p.last_modified = SystemTime::now();
             });
@@ -96,7 +98,7 @@ pub async fn load_resource_to_cache(
     } else {
         let ret = read_resource(resource.clone(), temps, cache, None).await?;
         cache.update_page(resource.get_path().clone(), |p| {
-            p.contents = ret.content.clone().into();
+            p.contents = ret.content.clone();
             p.dependencies = ret.dependencies.clone();
             p.last_modified = SystemTime::now();
         });
@@ -168,27 +170,29 @@ async fn expand_groon_tag(
 ) -> Result<HTMLFile, GroonError> {
     let tag_expand = match tag {
         GroonTag::Insert(template_path) => {
-            if template_path.file_name() == path.file_name() {
+            if template_path.get_path().file_name() == path.file_name() {
                 warn!(
-                    "Self referential template {}",
-                    template_path.to_str().unwrap_or("")
+                    "Self referential template {:?}",
+                    template_path.get_path()
                 );
                 return Err(GroonError::TagProcessing(
-                    TagProcessingError::SelfRefelercial(template_path),
+                    TagProcessingError::SelfRefelercial(template_path.get_path().to_owned()),
                 ));
             }
-            let temp_path = temps.join(&template_path);
-            dependencies.insert(temp_path.clone());
+            let temp_path = temps.join(template_path.get_path());
+            // this technically should not fail ever
+            let temp_path = ResourcePath::try_from_path(temp_path).unwrap();
+            dependencies.insert(temp_path.get_path().clone());
             // if no root deps were provided, use the current file dependencies as root
             let root_deps = match root_deps {
                 Some(rd) => {
                     log::debug!("rd: {:?}", rd);
-                    log::debug!("temp_path: {:?}", temp_path);
-                    rd.contains(&temp_path)
+                    log::debug!("temp_path: {:?}", temp_path.get_path());
+                    rd.contains(temp_path.get_path())
                         .then(|| {
                             GroonError::TagProcessing(TagProcessingError::DependencyCycle {
                                 file: path.to_owned(),
-                                dep: temp_path.to_owned(),
+                                dep: temp_path.get_path().to_owned(),
                             })
                         })
                         .map_or_else(|| Ok(()), Err)?;
@@ -196,11 +200,8 @@ async fn expand_groon_tag(
                 }
                 None => Some(&(*dependencies)),
             };
-            let dep_as_resource = ResourcePath::try_from_path(temp_path.clone()).unwrap_or_else(|p|
-                panic!("Cached dependency file of invalid format. File: {:?}", p)
-            );
             Box::pin(read_resource_or_load_from_cache(
-                dep_as_resource,
+                temp_path,
                 temps,
                 cache,
                 root_deps,
@@ -239,12 +240,11 @@ pub fn parse_groon_tag(tag_str: &str, file: &PathBuf) -> Result<GroonTag, TagPar
             }
             let path = &path[1..path.len() - 1];
             let insert = PathBuf::from_str(path).unwrap();
-            if let Some(ext) = insert.extension().and_then(|ex| ex.to_str())
-                && (ext == "html" || ext == "md")
-            {
-                return Ok(GroonTag::Insert(insert));
-            }
-            Err(TagParseError::InvalidInsertFileType { file: insert })
+            let insert = ResourcePath::try_from_path(insert)
+                .map_err(|p|{
+                    TagParseError::InvalidInsertFileType { file: p }
+            })?;
+            Ok(GroonTag::Insert(insert))
         }
         _ => Err(TagParseError::Unrecognized {
             file: file.to_owned(),
