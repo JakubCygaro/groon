@@ -16,7 +16,9 @@ pub struct PageCache {
 
 #[derive(Clone, Debug)]
 pub struct PageInfo {
-    pub contents: String,
+    /// contents can be dynamically unloaded from the cache without,
+    /// but other relevant information is kept
+    pub contents: Option<String>,
     pub dependencies: HashSet<PathBuf>,
     pub last_modified: SystemTime,
     pub last_accessed: Instant,
@@ -25,16 +27,20 @@ pub struct PageInfo {
 impl PageInfo {
     fn get_score(&self, now: &Instant) -> u64 {
         let delta = *now - self.last_accessed;
-        let sz_factor = self.contents.len() as u64 + self.dependencies.len() as u64;
-        let irrelevance_factor = delta.as_secs().min(sz_factor);
-        sz_factor - irrelevance_factor
+        if let Some(contents) = &self.contents {
+            let sz_factor = contents.len() as u64 + self.dependencies.len() as u64;
+            let irrelevance_factor = delta.as_secs().min(sz_factor);
+            sz_factor - irrelevance_factor
+        } else {
+            u64::MAX
+        }
     }
 }
 
 impl Default for PageInfo {
     fn default() -> Self {
         Self {
-            contents: String::from(""),
+            contents: None,
             dependencies: HashSet::new(),
             last_modified: SystemTime::now(),
             last_accessed: Instant::now(),
@@ -45,7 +51,7 @@ impl Default for PageInfo {
 impl From<HTMLFile> for PageInfo {
     fn from(value: HTMLFile) -> Self {
         Self {
-            contents: value.content,
+            contents: value.content.into(),
             dependencies: value.dependencies,
             last_modified: SystemTime::now(),
             last_accessed: Instant::now(),
@@ -56,7 +62,7 @@ impl From<HTMLFile> for PageInfo {
 impl From<PageInfo> for HTMLFile {
     fn from(value: PageInfo) -> Self {
         Self {
-            content: value.contents,
+            content: value.contents.unwrap_or_default(),
             dependencies: value.dependencies,
         }
     }
@@ -71,7 +77,9 @@ impl PageCache {
         }
     }
     pub fn add_page(&mut self, path: PathBuf, page: PageInfo) -> Option<PageInfo> {
-        self.current_size += page.contents.len() as u64;
+        if let Some(con) = &page.contents {
+            self.current_size += con.len() as u64;
+        }
         let old = self.pages.insert(path, page);
         self.cull();
         old
@@ -83,7 +91,9 @@ impl PageCache {
         self.pages.entry(path).and_modify(&f).or_insert_with(|| {
             let mut p = PageInfo::default();
             f(&mut p);
-            self.current_size += p.contents.len() as u64;
+            if let Some(con) = &p.contents {
+                self.current_size += con.len() as u64;
+            }
             p
         });
         self.cull();
@@ -96,6 +106,9 @@ impl PageCache {
     pub fn has_page(&self, path: &PathBuf) -> bool {
         self.pages.contains_key(path)
     }
+    pub fn page_contents_loaded(&self, path: &PathBuf) -> bool {
+        self.pages.get(path).map(|p| p.contents.is_some()).unwrap_or(false)
+    }
     fn print_cache(&self) {
         println!("{:?}", self.pages.keys())
     }
@@ -106,11 +119,24 @@ impl PageCache {
         log::debug!("performing cache cull");
         let now = Instant::now();
         let mut over: i64 = (self.current_size - self.max_size).try_into().unwrap();
-        log::debug!("cache contents {over} over the limit of {} bytes", self.max_size);
+        log::debug!(
+            "cache contents {} bytes",
+            self.current_size
+        );
+        log::debug!(
+            "cache contents {over} over the limit of {} bytes",
+            self.max_size
+        );
         let mut scored = self
             .pages
             .iter()
-            .map(|(p, page)| (p.to_owned(), page.get_score(&now), page.contents.len()))
+            .map(|(p, page)| {
+                (
+                    p.to_owned(),
+                    page.get_score(&now),
+                    page.contents.as_ref().map(|c| c.len()).unwrap_or_default(),
+                )
+            })
             .collect::<Vec<_>>();
         scored.sort_by(|a, b| a.1.cmp(&b.1));
         let mut freed = 0;
@@ -118,16 +144,21 @@ impl PageCache {
             .into_iter()
             .take_while(|(_, _, sz)| {
                 let test = over >= 0;
-                over -= *sz as i64;
-                freed += *sz as u64;
+                if test{
+                    over -= *sz as i64;
+                    freed += *sz as u64;
+                }
                 test
             })
-            .map(|(p, _, _)| p)
+            .map(|(p, _, sz)| (p, sz))
             .collect::<Vec<_>>();
         log::debug!("to_remove {:?}", to_remove);
-        for path in to_remove {
-            self.pages.remove(&path);
+        for (path, _) in to_remove {
+            self.pages.entry(path).and_modify(|p|{
+                p.contents = None
+            });
         }
+        log::debug!("freed {freed}");
         self.current_size -= freed;
     }
 }

@@ -55,12 +55,12 @@ pub async fn read_resource_or_load_from_cache(
 ) -> Result<HTMLFile, GroonError> {
     if cache.has_page(resource.get_path()) {
         log::debug!("{:?} cache hit", resource.get_path());
-        if !is_outdated(resource.get_path(), cache).await? {
+        if !is_outdated(resource.get_path(), cache).await? && cache.page_contents_loaded(resource.get_path()) {
             let page = cache.get_page(resource.get_path()).cloned().unwrap();
             cache.page_accessed_now(resource.get_path().to_owned());
             log::debug!("{:?} return cached", resource.get_path());
             return Ok(HTMLFile {
-                content: page.contents,
+                content: page.contents.unwrap(),
                 dependencies: page.dependencies,
             });
         }
@@ -68,7 +68,7 @@ pub async fn read_resource_or_load_from_cache(
     log::debug!("cache miss");
     let ret = read_resource(resource.clone(), temps, cache, root_deps).await?;
     cache.update_page(resource.get_path().clone(), |p| {
-        p.contents = ret.content.clone();
+        p.contents = ret.content.clone().into();
         p.dependencies = ret.dependencies.clone();
         p.last_modified = SystemTime::now();
         p.last_accessed = Instant::now();
@@ -86,10 +86,10 @@ pub async fn load_resource_to_cache(
     cache: &mut cache::PageCache,
 ) -> Result<bool, GroonError> {
     if cache.has_page(resource.get_path()) {
-        if is_outdated(resource.get_path(), cache).await? {
+        if is_outdated(resource.get_path(), cache).await?{
             let ret = read_resource(resource.clone(), temps, cache, None).await?;
             cache.update_page(resource.get_path().to_owned(), |p| {
-                p.contents = ret.content.clone();
+                p.contents = ret.content.clone().into();
                 p.dependencies = ret.dependencies.clone();
                 p.last_modified = SystemTime::now();
             });
@@ -98,7 +98,7 @@ pub async fn load_resource_to_cache(
     } else {
         let ret = read_resource(resource.clone(), temps, cache, None).await?;
         cache.update_page(resource.get_path().clone(), |p| {
-            p.contents = ret.content.clone();
+            p.contents = ret.content.clone().into();
             p.dependencies = ret.dependencies.clone();
             p.last_modified = SystemTime::now();
         });

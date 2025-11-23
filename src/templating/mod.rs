@@ -46,7 +46,7 @@ async fn process_resource_with_deps(
         log::debug!("{:?} reread", resource.get_path());
         let read = parse::read_resource(resource.clone(), temps, cache, None).await?;
         cache.update_page(resource.get_path().to_owned(), |p| {
-            p.contents = read.content.clone();
+            p.contents = read.content.clone().into();
             p.dependencies = read.dependencies.clone();
             p.last_modified = SystemTime::now();
             p.last_accessed = Instant::now();
