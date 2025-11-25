@@ -145,7 +145,7 @@ async fn main() -> std::io::Result<()> {
     let args = parse_args();
     env_logger::init_from_env(env_logger::Env::new().default_filter_or("debug"));
     let cache = cache::PageCache::new(args.cache_size);
-    log::info!("Using cache of size {}", args.cache_size);
+    log::info!("Using cache of {} bytes", args.cache_size);
     let app_state = AppState {
         root_path: path::PathBuf::from_str(&args.wwwroot)
             .unwrap()
