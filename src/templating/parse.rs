@@ -53,19 +53,16 @@ pub async fn read_resource_or_load_from_cache(
     cache: &mut cache::PageCache,
     root_deps: Option<&HashSet<PathBuf>>,
 ) -> Result<HTMLFile, GroonError> {
-    if cache.has_page(resource.get_path()) {
-        log::debug!("{:?} cache hit", resource.get_path());
-        if !is_outdated(resource.get_path(), cache).await? && cache.page_contents_loaded(resource.get_path()) {
-            let page = cache.get_page(resource.get_path()).cloned().unwrap();
-            cache.page_accessed_now(resource.get_path().to_owned());
-            log::debug!("{:?} return cached", resource.get_path());
-            return Ok(HTMLFile {
-                content: page.contents.unwrap(),
-                dependencies: page.dependencies,
-            });
-        }
+    if !is_outdated(resource.get_path(), cache).await?
+        && cache.page_contents_loaded(resource.get_path())
+    {
+        let page = cache.get_page(resource.get_path()).cloned().unwrap();
+        cache.page_accessed_now(resource.get_path().to_owned());
+        return Ok(HTMLFile {
+            content: page.contents.unwrap(),
+            dependencies: page.dependencies,
+        });
     }
-    log::debug!("cache miss");
     let ret = read_resource(resource.clone(), temps, cache, root_deps).await?;
     cache.update_page(resource.get_path().clone(), |p| {
         p.contents = ret.content.clone().into();
@@ -86,7 +83,7 @@ pub async fn load_resource_to_cache(
     cache: &mut cache::PageCache,
 ) -> Result<bool, GroonError> {
     if cache.has_page(resource.get_path()) {
-        if is_outdated(resource.get_path(), cache).await?{
+        if is_outdated(resource.get_path(), cache).await? {
             let ret = read_resource(resource.clone(), temps, cache, None).await?;
             cache.update_page(resource.get_path().to_owned(), |p| {
                 p.contents = ret.content.clone().into();
@@ -123,7 +120,6 @@ pub async fn read_html_file(
     cache: &mut cache::PageCache,
     root_deps: Option<&HashSet<PathBuf>>,
 ) -> Result<HTMLFile, GroonError> {
-    log::debug!("{:?} read_html_file", path);
     let content = tokio::fs::read_to_string(path.clone()).await?;
 
     let mut dependencies: HashSet<PathBuf> = HashSet::new();
@@ -171,10 +167,7 @@ async fn expand_groon_tag(
     let tag_expand = match tag {
         GroonTag::Insert(template_path) => {
             if template_path.get_path().file_name() == path.file_name() {
-                warn!(
-                    "Self referential template {:?}",
-                    template_path.get_path()
-                );
+                warn!("Self referential template {:?}", template_path.get_path());
                 return Err(GroonError::TagProcessing(
                     TagProcessingError::SelfRefelercial(template_path.get_path().to_owned()),
                 ));
@@ -201,10 +194,7 @@ async fn expand_groon_tag(
                 None => Some(&(*dependencies)),
             };
             Box::pin(read_resource_or_load_from_cache(
-                temp_path,
-                temps,
-                cache,
-                root_deps,
+                temp_path, temps, cache, root_deps,
             ))
             .await?
         }
@@ -241,9 +231,7 @@ pub fn parse_groon_tag(tag_str: &str, file: &PathBuf) -> Result<GroonTag, TagPar
             let path = &path[1..path.len() - 1];
             let insert = PathBuf::from_str(path).unwrap();
             let insert = ResourcePath::try_from_path(insert)
-                .map_err(|p|{
-                    TagParseError::InvalidInsertFileType { file: p }
-            })?;
+                .map_err(|p| TagParseError::InvalidInsertFileType { file: p })?;
             Ok(GroonTag::Insert(insert))
         }
         _ => Err(TagParseError::Unrecognized {

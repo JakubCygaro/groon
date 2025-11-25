@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::ops::Div;
 use std::path::PathBuf;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Instant, SystemTime};
 
 use crate::templating::HTMLFile;
 
@@ -16,8 +15,8 @@ pub struct PageCache {
 
 #[derive(Clone, Debug)]
 pub struct PageInfo {
-    /// contents can be dynamically unloaded from the cache without,
-    /// but other relevant information is kept
+    /// contents can be dynamically unloaded from the cache,
+    /// but other relevant information about dependencies and usage times is kept
     pub contents: Option<String>,
     pub dependencies: HashSet<PathBuf>,
     pub last_modified: SystemTime,
@@ -76,6 +75,7 @@ impl PageCache {
             pages: PageInfoMap::new(),
         }
     }
+    #[allow(dead_code)]
     pub fn add_page(&mut self, path: PathBuf, page: PageInfo) -> Option<PageInfo> {
         if let Some(con) = &page.contents {
             self.current_size += con.len() as u64;
@@ -109,22 +109,19 @@ impl PageCache {
     pub fn page_contents_loaded(&self, path: &PathBuf) -> bool {
         self.pages.get(path).map(|p| p.contents.is_some()).unwrap_or(false)
     }
-    fn print_cache(&self) {
-        println!("{:?}", self.pages.keys())
-    }
     fn cull(&mut self) {
         if self.current_size <= self.max_size {
             return;
         }
-        log::debug!("performing cache cull");
+        log::debug!("Performing cache cull");
         let now = Instant::now();
         let mut over: i64 = (self.current_size - self.max_size).try_into().unwrap();
         log::debug!(
-            "cache contents {} bytes",
+            "Cache contents: {} bytes",
             self.current_size
         );
         log::debug!(
-            "cache contents {over} over the limit of {} bytes",
+            "Cache contents are {over} bytes over the imposed limit of {} bytes",
             self.max_size
         );
         let mut scored = self
@@ -152,13 +149,13 @@ impl PageCache {
             })
             .map(|(p, _, sz)| (p, sz))
             .collect::<Vec<_>>();
-        log::debug!("to_remove {:?}", to_remove);
+        log::debug!("Cached files to remove {:?}", to_remove);
         for (path, _) in to_remove {
             self.pages.entry(path).and_modify(|p|{
                 p.contents = None
             });
         }
-        log::debug!("freed {freed}");
+        log::debug!("Freed {freed} bytes from cache memory");
         self.current_size -= freed;
     }
 }
