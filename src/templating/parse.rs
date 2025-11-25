@@ -53,8 +53,8 @@ pub async fn read_resource_or_load_from_cache(
     cache: &mut cache::PageCache,
     root_deps: Option<&HashSet<PathBuf>>,
 ) -> Result<HTMLFile, GroonError> {
-    if !is_outdated(resource.get_path(), cache).await?
-        && cache.page_contents_loaded(resource.get_path())
+    if cache.page_contents_loaded(resource.get_path())
+        && !is_outdated(resource.get_path(), cache).await?
     {
         let page = cache.get_page(resource.get_path()).cloned().unwrap();
         cache.page_accessed_now(resource.get_path().to_owned());
