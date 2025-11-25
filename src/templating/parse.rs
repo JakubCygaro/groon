@@ -179,8 +179,6 @@ async fn expand_groon_tag(
             // if no root deps were provided, use the current file dependencies as root
             let root_deps = match root_deps {
                 Some(rd) => {
-                    log::debug!("rd: {:?}", rd);
-                    log::debug!("temp_path: {:?}", temp_path.get_path());
                     rd.contains(temp_path.get_path())
                         .then(|| {
                             GroonError::TagProcessing(TagProcessingError::DependencyCycle {
